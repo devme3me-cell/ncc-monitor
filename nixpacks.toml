@@ -1,0 +1,14 @@
+[phases.setup]
+nixPkgs = ["nodejs-22_x", "pnpm"]
+
+[phases.install]
+cmds = ["pnpm install"]
+
+[phases.build]
+cmds = [
+  "pnpm build",
+  "npx expo export --platform web"
+]
+
+[start]
+cmd = "NODE_ENV=production node dist/index.js"
