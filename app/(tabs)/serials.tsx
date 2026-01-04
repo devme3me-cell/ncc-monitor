@@ -5,7 +5,6 @@ import {
   FlatList,
   Pressable,
   TextInput,
-  Modal,
   ActivityIndicator,
   RefreshControl,
   Switch,
@@ -343,13 +342,9 @@ export default function SerialsScreen() {
       </View>
 
       {/* Add/Edit Modal */}
-      <Modal
-        visible={modalVisible}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={closeModal}
-      >
-        <View style={[styles.modalContainer, { backgroundColor: colors.background }]}>
+      {modalVisible && (
+        <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0, 0, 0, 0.5)' }]}>
+          <View style={[styles.modalContainer, { backgroundColor: colors.background }]}>
           {/* Modal Header */}
           <View
             style={[styles.modalHeader, { borderBottomColor: colors.border }]}
@@ -459,12 +454,23 @@ export default function SerialsScreen() {
             </View>
           </View>
         </View>
-      </Modal>
+        </View>
+      )}
     </ScreenContainer>
   );
 }
 
 const styles = StyleSheet.create({
+  modalOverlay: {
+    position: 'absolute' as 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
   addIconButton: {
     width: 44,
     height: 44,
@@ -507,7 +513,19 @@ const styles = StyleSheet.create({
     width: 1,
   },
   modalContainer: {
-    flex: 1,
+    width: Platform.OS === 'web' ? '90%' : '100%',
+    maxWidth: Platform.OS === 'web' ? 500 : undefined,
+    maxHeight: Platform.OS === 'web' ? '90%' : '100%',
+    borderRadius: Platform.OS === 'web' ? 16 : 0,
+    overflow: 'hidden',
+    ...Platform.select({
+      web: {
+        boxShadow: '0 10px 40px rgba(0,0,0,0.3)',
+      },
+      default: {
+        flex: 1,
+      },
+    }),
   },
   modalHeader: {
     flexDirection: "row",
