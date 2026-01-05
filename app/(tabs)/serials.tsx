@@ -139,6 +139,13 @@ export default function SerialsScreen() {
   };
 
   const handleDelete = (id: number, name: string) => {
+    if (Platform.OS === 'web') {
+      if (window.confirm(`確定要刪除「${name}」嗎？相關的偵測記錄也會一併刪除。`)) {
+        deleteMutation.mutate({ id });
+      }
+      return;
+    }
+
     Alert.alert("確認刪除", `確定要刪除「${name}」嗎？相關的偵測記錄也會一併刪除。`, [
       { text: "取消", style: "cancel" },
       {
@@ -315,45 +322,97 @@ export default function SerialsScreen() {
                 <View
                   style={[styles.actionRow, { borderTopColor: colors.border }]}
                 >
-                  <Pressable
-                    style={({ pressed }) => [
-                      styles.actionButton,
-                      pressed && styles.buttonPressedLight,
-                    ]}
-                    onPress={() => handleScan(item.id)}
-                    disabled={scanMutation.isPending}
-                  >
-                    {scanMutation.isPending &&
-                    scanMutation.variables?.serialId === item.id ? (
-                      <ActivityIndicator size="small" color={colors.tint} />
-                    ) : (
-                      <IconSymbol
-                        name="magnifyingglass"
-                        size={18}
-                        color={colors.tint}
-                      />
-                    )}
-                    <Text style={{ color: colors.tint }} className="text-sm ml-1">
-                      掃描
-                    </Text>
-                  </Pressable>
+                  {Platform.OS === 'web' ? (
+                    <button
+                      onClick={() => handleScan(item.id)}
+                      disabled={scanMutation.isPending}
+                      style={{
+                        flex: 1,
+                        display: 'flex',
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '12px 0',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: colors.tint,
+                        fontSize: '14px',
+                      }}
+                    >
+                      {scanMutation.isPending ? (
+                        <ActivityIndicator size="small" color={colors.tint} />
+                      ) : (
+                        <IconSymbol
+                          name="magnifyingglass"
+                          size={18}
+                          color={colors.tint}
+                        />
+                      )}
+                      <span style={{ marginLeft: '4px' }}>掃描</span>
+                    </button>
+                  ) : (
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.actionButton,
+                        pressed && styles.buttonPressedLight,
+                      ]}
+                      onPress={() => handleScan(item.id)}
+                      disabled={scanMutation.isPending}
+                    >
+                      {scanMutation.isPending ? (
+                        <ActivityIndicator size="small" color={colors.tint} />
+                      ) : (
+                        <IconSymbol
+                          name="magnifyingglass"
+                          size={18}
+                          color={colors.tint}
+                        />
+                      )}
+                      <Text style={{ color: colors.tint }} className="text-sm ml-1">
+                        掃描
+                      </Text>
+                    </Pressable>
+                  )}
 
                   <View
                     style={[styles.actionDivider, { backgroundColor: colors.border }]}
                   />
 
-                  <Pressable
-                    style={({ pressed }) => [
-                      styles.actionButton,
-                      pressed && styles.buttonPressedLight,
-                    ]}
-                    onPress={() => handleDelete(item.id, item.name)}
-                  >
-                    <IconSymbol name="trash" size={18} color={colors.error} />
-                    <Text style={{ color: colors.error }} className="text-sm ml-1">
-                      刪除
-                    </Text>
-                  </Pressable>
+                  {Platform.OS === 'web' ? (
+                    <button
+                      onClick={() => handleDelete(item.id, item.name)}
+                      style={{
+                        flex: 1,
+                        display: 'flex',
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '12px 0',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: colors.error,
+                        fontSize: '14px',
+                      }}
+                    >
+                      <IconSymbol name="trash" size={18} color={colors.error} />
+                      <span style={{ marginLeft: '4px' }}>刪除</span>
+                    </button>
+                  ) : (
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.actionButton,
+                        pressed && styles.buttonPressedLight,
+                      ]}
+                      onPress={() => handleDelete(item.id, item.name)}
+                    >
+                      <IconSymbol name="trash" size={18} color={colors.error} />
+                      <Text style={{ color: colors.error }} className="text-sm ml-1">
+                        刪除
+                      </Text>
+                    </Pressable>
+                  )}
                 </View>
               </View>
             )}
