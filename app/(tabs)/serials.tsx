@@ -100,6 +100,7 @@ export default function SerialsScreen() {
   }, [refetch]);
 
   const openAddModal = () => {
+    console.log('Opening add modal');
     setEditingId(null);
     setFormData({ name: "", serialNumber: "", isActive: true });
     setModalVisible(true);
@@ -200,16 +201,35 @@ export default function SerialsScreen() {
                 管理您的 NCC 認證序號
               </Text>
             </View>
-            <Pressable
-              style={({ pressed }) => [
-                styles.addIconButton,
-                { backgroundColor: colors.tint },
-                pressed && styles.buttonPressed,
-              ]}
-              onPress={openAddModal}
-            >
-              <IconSymbol name="plus" size={24} color={colors.background} />
-            </Pressable>
+            {Platform.OS === 'web' ? (
+              <button
+                onClick={openAddModal}
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 22,
+                  backgroundColor: colors.tint,
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <IconSymbol name="plus" size={24} color={colors.background} />
+              </button>
+            ) : (
+              <Pressable
+                style={({ pressed }) => [
+                  styles.addIconButton,
+                  { backgroundColor: colors.tint },
+                  pressed && styles.buttonPressed,
+                ]}
+                onPress={openAddModal}
+              >
+                <IconSymbol name="plus" size={24} color={colors.background} />
+              </Pressable>
+            )}
           </View>
         </View>
 
@@ -349,33 +369,73 @@ export default function SerialsScreen() {
           <View
             style={[styles.modalHeader, { borderBottomColor: colors.border }]}
           >
-            <Pressable
-              onPress={closeModal}
-              style={({ pressed }) => pressed && styles.buttonPressedLight}
-            >
-              <Text style={{ color: colors.tint }} className="text-base">
-                取消
-              </Text>
-            </Pressable>
+            {Platform.OS === 'web' ? (
+              <button
+                onClick={closeModal}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+              >
+                <Text style={{ color: colors.tint }} className="text-base">
+                  取消
+                </Text>
+              </button>
+            ) : (
+              <Pressable
+                onPress={closeModal}
+                style={({ pressed }) => pressed && styles.buttonPressedLight}
+              >
+                <Text style={{ color: colors.tint }} className="text-base">
+                  取消
+                </Text>
+              </Pressable>
+            )}
             <Text className="text-lg font-semibold text-foreground">
               {editingId ? "編輯序號" : "新增序號"}
             </Text>
-            <Pressable
-              onPress={handleSave}
-              disabled={createMutation.isPending || updateMutation.isPending}
-              style={({ pressed }) => pressed && styles.buttonPressedLight}
-            >
-              {createMutation.isPending || updateMutation.isPending ? (
-                <ActivityIndicator size="small" color={colors.tint} />
-              ) : (
-                <Text
-                  style={{ color: colors.tint }}
-                  className="text-base font-semibold"
-                >
-                  儲存
-                </Text>
-              )}
-            </Pressable>
+            {Platform.OS === 'web' ? (
+              <button
+                onClick={handleSave}
+                disabled={createMutation.isPending || updateMutation.isPending}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+              >
+                {createMutation.isPending || updateMutation.isPending ? (
+                  <ActivityIndicator size="small" color={colors.tint} />
+                ) : (
+                  <Text
+                    style={{ color: colors.tint }}
+                    className="text-base font-semibold"
+                  >
+                    儲存
+                  </Text>
+                )}
+              </button>
+            ) : (
+              <Pressable
+                onPress={handleSave}
+                disabled={createMutation.isPending || updateMutation.isPending}
+                style={({ pressed }) => pressed && styles.buttonPressedLight}
+              >
+                {createMutation.isPending || updateMutation.isPending ? (
+                  <ActivityIndicator size="small" color={colors.tint} />
+                ) : (
+                  <Text
+                    style={{ color: colors.tint }}
+                    className="text-base font-semibold"
+                  >
+                    儲存
+                  </Text>
+                )}
+              </Pressable>
+            )}
           </View>
 
           {/* Form */}
