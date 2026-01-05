@@ -16,6 +16,46 @@ import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
+// ==================== In-Memory Storage (Fallback) ====================
+// Used when DATABASE_URL is not configured (e.g., demo/preview mode)
+
+interface InMemorySerial {
+  id: number;
+  userId: number;
+  name: string;
+  serialNumber: string;
+  isActive: boolean;
+  lastScanAt: Date | null;
+  lastShopeeScanAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+interface InMemoryDetection {
+  id: number;
+  serialId: number;
+  sourceUrl: string;
+  pageTitle: string | null;
+  snippet: string | null;
+  sourceType: "general" | "shopee";
+  isShopee: boolean;
+  shopeeShopId: string | null;
+  shopeeProductId: string | null;
+  shopeeShopName: string | null;
+  status: "new" | "processed" | "ignored";
+  detectedAt: Date;
+  createdAt: Date;
+}
+
+const inMemoryStore = {
+  serials: [] as InMemorySerial[],
+  detections: [] as InMemoryDetection[],
+  nextSerialId: 1,
+  nextDetectionId: 1,
+};
+
+console.log("[Database] In-memory storage initialized for demo mode");
+
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
@@ -37,7 +77,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
 
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot upsert user: database not available");
+    console.warn("[Database] Cannot upsert user: database not available (demo mode)");
     return;
   }
 
@@ -48,55 +88,32 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     const updateSet: Record<string, unknown> = {};
 
     const textFields = ["name", "email", "loginMethod"] as const;
-    type TextField = (typeof textFields)[number];
-
-    const assignNullable = (field: TextField) => {
-      const value = user[field];
-      if (value === undefined) return;
-      const normalized = value ?? null;
-      values[field] = normalized;
-      updateSet[field] = normalized;
-    };
-
-    textFields.forEach(assignNullable);
-
-    if (user.lastSignedIn !== undefined) {
-      values.lastSignedIn = user.lastSignedIn;
-      updateSet.lastSignedIn = user.lastSignedIn;
-    }
-    if (user.role !== undefined) {
-      values.role = user.role;
-      updateSet.role = user.role;
-    } else if (user.openId === ENV.ownerOpenId) {
-      values.role = "admin";
-      updateSet.role = "admin";
+    for (const field of textFields) {
+      if (user[field] !== undefined) {
+        values[field] = user[field];
+        updateSet[field] = sql`VALUES(${sql.identifier(field)})`;
+      }
     }
 
-    if (!values.lastSignedIn) {
-      values.lastSignedIn = new Date();
-    }
-
-    if (Object.keys(updateSet).length === 0) {
-      updateSet.lastSignedIn = new Date();
-    }
-
-    await db.insert(users).values(values).onDuplicateKeyUpdate({
-      set: updateSet,
-    });
+    await db
+      .insert(users)
+      .values(values)
+      .onDuplicateKeyUpdate({ set: updateSet });
   } catch (error) {
-    console.error("[Database] Failed to upsert user:", error);
+    console.error("[Database] Error upserting user:", error);
     throw error;
   }
 }
 
 export async function getUserByOpenId(openId: string) {
   const db = await getDb();
-  if (!db) {
-    console.warn("[Database] Cannot get user: database not available");
-    return undefined;
-  }
+  if (!db) return undefined;
 
-  const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
+  const result = await db
+    .select()
+    .from(users)
+    .where(eq(users.openId, openId))
+    .limit(1);
 
   return result.length > 0 ? result[0] : undefined;
 }
@@ -105,7 +122,12 @@ export async function getUserByOpenId(openId: string) {
 
 export async function getUserSerials(userId: number): Promise<NccSerial[]> {
   const db = await getDb();
-  if (!db) return [];
+  if (!db) {
+    // Return from in-memory storage
+    return inMemoryStore.serials
+      .filter(s => s.userId === userId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()) as NccSerial[];
+  }
 
   return db
     .select()
@@ -116,7 +138,11 @@ export async function getUserSerials(userId: number): Promise<NccSerial[]> {
 
 export async function getSerialById(id: number, userId: number): Promise<NccSerial | undefined> {
   const db = await getDb();
-  if (!db) return undefined;
+  if (!db) {
+    // Return from in-memory storage
+    const serial = inMemoryStore.serials.find(s => s.id === id && s.userId === userId);
+    return serial as NccSerial | undefined;
+  }
 
   const result = await db
     .select()
@@ -129,7 +155,24 @@ export async function getSerialById(id: number, userId: number): Promise<NccSeri
 
 export async function createSerial(data: InsertNccSerial): Promise<number> {
   const db = await getDb();
-  if (!db) throw new Error("Database not available");
+  if (!db) {
+    // Use in-memory storage
+    const now = new Date();
+    const newSerial: InMemorySerial = {
+      id: inMemoryStore.nextSerialId++,
+      userId: data.userId,
+      name: data.name,
+      serialNumber: data.serialNumber,
+      isActive: data.isActive ?? true,
+      lastScanAt: null,
+      lastShopeeScanAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    inMemoryStore.serials.push(newSerial);
+    console.log("[Database] Created serial in memory:", newSerial);
+    return newSerial.id;
+  }
 
   const result = await db.insert(nccSerials).values(data);
   return Number(result[0].insertId);
@@ -141,7 +184,15 @@ export async function updateSerial(
   data: Partial<Omit<InsertNccSerial, "id" | "userId" | "createdAt">>
 ): Promise<void> {
   const db = await getDb();
-  if (!db) throw new Error("Database not available");
+  if (!db) {
+    // Update in-memory storage
+    const serial = inMemoryStore.serials.find(s => s.id === id && s.userId === userId);
+    if (serial) {
+      Object.assign(serial, data, { updatedAt: new Date() });
+      console.log("[Database] Updated serial in memory:", serial);
+    }
+    return;
+  }
 
   await db
     .update(nccSerials)
@@ -151,52 +202,112 @@ export async function updateSerial(
 
 export async function deleteSerial(id: number, userId: number): Promise<void> {
   const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  // Delete related detections first
-  const serial = await getSerialById(id, userId);
-  if (serial) {
-    await db.delete(detections).where(eq(detections.serialId, id));
-    await db.delete(scanLogs).where(eq(scanLogs.serialId, id));
+  if (!db) {
+    // Delete from in-memory storage
+    const index = inMemoryStore.serials.findIndex(s => s.id === id && s.userId === userId);
+    if (index !== -1) {
+      inMemoryStore.serials.splice(index, 1);
+      // Also delete related detections
+      inMemoryStore.detections = inMemoryStore.detections.filter(d => d.serialId !== id);
+      console.log("[Database] Deleted serial from memory:", id);
+    }
+    return;
   }
 
+  // Delete related detections first
+  await db.delete(detections).where(eq(detections.serialId, id));
+  await db.delete(scanLogs).where(eq(scanLogs.serialId, id));
   await db
     .delete(nccSerials)
     .where(and(eq(nccSerials.id, id), eq(nccSerials.userId, userId)));
 }
 
-export async function getActiveSerials(): Promise<NccSerial[]> {
-  const db = await getDb();
-  if (!db) return [];
-
-  return db.select().from(nccSerials).where(eq(nccSerials.isActive, true));
-}
-
 export async function updateSerialLastScan(
-  id: number,
-  scanType: "general" | "shopee" | "all" = "all"
+  serialId: number,
+  scanType: "all" | "shopee" | "general"
 ): Promise<void> {
   const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  const updateData: Partial<NccSerial> = {};
   const now = new Date();
-
-  if (scanType === "all" || scanType === "general") {
-    updateData.lastScanAt = now;
+  
+  if (!db) {
+    // Update in-memory storage
+    const serial = inMemoryStore.serials.find(s => s.id === serialId);
+    if (serial) {
+      if (scanType === "shopee") {
+        serial.lastShopeeScanAt = now;
+      } else {
+        serial.lastScanAt = now;
+      }
+      serial.updatedAt = now;
+    }
+    return;
   }
-  if (scanType === "all" || scanType === "shopee") {
-    updateData.lastShopeeScanAt = now;
-  }
 
-  await db.update(nccSerials).set(updateData).where(eq(nccSerials.id, id));
+  if (scanType === "shopee") {
+    await db
+      .update(nccSerials)
+      .set({ lastShopeeScanAt: now })
+      .where(eq(nccSerials.id, serialId));
+  } else {
+    await db
+      .update(nccSerials)
+      .set({ lastScanAt: now })
+      .where(eq(nccSerials.id, serialId));
+  }
 }
 
 // ==================== Detection Functions ====================
 
+export async function getDetectionsByUser(
+  userId: number,
+  filter?: { isShopee?: boolean }
+): Promise<Detection[]> {
+  const db = await getDb();
+  if (!db) {
+    // Return from in-memory storage
+    const userSerialIds = inMemoryStore.serials
+      .filter(s => s.userId === userId)
+      .map(s => s.id);
+    
+    let results = inMemoryStore.detections.filter(d => userSerialIds.includes(d.serialId));
+    
+    if (filter?.isShopee !== undefined) {
+      results = results.filter(d => d.isShopee === filter.isShopee);
+    }
+    
+    return results.sort((a, b) => b.detectedAt.getTime() - a.detectedAt.getTime()) as Detection[];
+  }
+
+  // Get all serial IDs for this user
+  const userSerials = await db
+    .select({ id: nccSerials.id })
+    .from(nccSerials)
+    .where(eq(nccSerials.userId, userId));
+
+  if (userSerials.length === 0) return [];
+
+  const serialIds = userSerials.map((s) => s.id);
+
+  let query = db
+    .select()
+    .from(detections)
+    .where(sql`${detections.serialId} IN (${sql.join(serialIds.map(id => sql`${id}`), sql`, `)})`);
+
+  if (filter?.isShopee !== undefined) {
+    query = query.where(eq(detections.isShopee, filter.isShopee)) as typeof query;
+  }
+
+  return query.orderBy(desc(detections.detectedAt));
+}
+
 export async function getDetectionsBySerial(serialId: number): Promise<Detection[]> {
   const db = await getDb();
-  if (!db) return [];
+  if (!db) {
+    // Return from in-memory storage
+    return inMemoryStore.detections
+      .filter(d => d.serialId === serialId)
+      .sort((a, b) => b.detectedAt.getTime() - a.detectedAt.getTime()) as Detection[];
+  }
 
   return db
     .select()
@@ -205,82 +316,15 @@ export async function getDetectionsBySerial(serialId: number): Promise<Detection
     .orderBy(desc(detections.detectedAt));
 }
 
-export async function getDetectionsByUser(
-  userId: number,
-  filter?: { isShopee?: boolean; sourceType?: "general" | "shopee" }
-): Promise<(Detection & { serialName: string; serialNumber: string })[]> {
+export async function checkDetectionExists(
+  serialId: number,
+  sourceUrl: string
+): Promise<boolean> {
   const db = await getDb();
-  if (!db) return [];
-
-  const conditions = [eq(nccSerials.userId, userId)];
-
-  if (filter?.isShopee !== undefined) {
-    conditions.push(eq(detections.isShopee, filter.isShopee));
+  if (!db) {
+    // Check in-memory storage
+    return inMemoryStore.detections.some(d => d.serialId === serialId && d.sourceUrl === sourceUrl);
   }
-  if (filter?.sourceType) {
-    conditions.push(eq(detections.sourceType, filter.sourceType));
-  }
-
-  const result = await db
-    .select({
-      id: detections.id,
-      serialId: detections.serialId,
-      sourceUrl: detections.sourceUrl,
-      pageTitle: detections.pageTitle,
-      snippet: detections.snippet,
-      sourceType: detections.sourceType,
-      isShopee: detections.isShopee,
-      shopeeShopId: detections.shopeeShopId,
-      shopeeProductId: detections.shopeeProductId,
-      shopeeShopName: detections.shopeeShopName,
-      status: detections.status,
-      detectedAt: detections.detectedAt,
-      createdAt: detections.createdAt,
-      serialName: nccSerials.name,
-      serialNumber: nccSerials.serialNumber,
-    })
-    .from(detections)
-    .innerJoin(nccSerials, eq(detections.serialId, nccSerials.id))
-    .where(and(...conditions))
-    .orderBy(desc(detections.detectedAt));
-
-  return result;
-}
-
-export async function getNewDetectionsCount(userId: number): Promise<number> {
-  const db = await getDb();
-  if (!db) return 0;
-
-  const result = await db
-    .select({ count: sql<number>`count(*)` })
-    .from(detections)
-    .innerJoin(nccSerials, eq(detections.serialId, nccSerials.id))
-    .where(and(eq(nccSerials.userId, userId), eq(detections.status, "new")));
-
-  return result[0]?.count ?? 0;
-}
-
-export async function createDetection(data: InsertDetection): Promise<number> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  const result = await db.insert(detections).values(data);
-  return Number(result[0].insertId);
-}
-
-export async function updateDetectionStatus(
-  id: number,
-  status: "new" | "processed" | "ignored"
-): Promise<void> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  await db.update(detections).set({ status }).where(eq(detections.id, id));
-}
-
-export async function checkDetectionExists(serialId: number, sourceUrl: string): Promise<boolean> {
-  const db = await getDb();
-  if (!db) return false;
 
   const result = await db
     .select({ id: detections.id })
@@ -291,29 +335,99 @@ export async function checkDetectionExists(serialId: number, sourceUrl: string):
   return result.length > 0;
 }
 
-// ==================== Scan Log Functions ====================
-
-export async function createScanLog(data: InsertScanLog): Promise<number> {
+export async function createDetection(data: InsertDetection): Promise<number> {
   const db = await getDb();
-  if (!db) throw new Error("Database not available");
+  if (!db) {
+    // Use in-memory storage
+    const now = new Date();
+    const newDetection: InMemoryDetection = {
+      id: inMemoryStore.nextDetectionId++,
+      serialId: data.serialId,
+      sourceUrl: data.sourceUrl,
+      pageTitle: data.pageTitle ?? null,
+      snippet: data.snippet ?? null,
+      sourceType: data.sourceType ?? "general",
+      isShopee: data.isShopee ?? false,
+      shopeeShopId: data.shopeeShopId ?? null,
+      shopeeProductId: data.shopeeProductId ?? null,
+      shopeeShopName: data.shopeeShopName ?? null,
+      status: data.status ?? "new",
+      detectedAt: now,
+      createdAt: now,
+    };
+    inMemoryStore.detections.push(newDetection);
+    console.log("[Database] Created detection in memory:", newDetection.id);
+    return newDetection.id;
+  }
 
-  const result = await db.insert(scanLogs).values(data);
+  const result = await db.insert(detections).values(data);
   return Number(result[0].insertId);
 }
 
-export async function getRecentScanLogs(
-  serialId: number,
-  limit: number = 10
-): Promise<typeof scanLogs.$inferSelect[]> {
+export async function updateDetectionStatus(
+  id: number,
+  status: "new" | "processed" | "ignored"
+): Promise<void> {
   const db = await getDb();
-  if (!db) return [];
+  if (!db) {
+    // Update in-memory storage
+    const detection = inMemoryStore.detections.find(d => d.id === id);
+    if (detection) {
+      detection.status = status;
+    }
+    return;
+  }
 
-  return db
-    .select()
-    .from(scanLogs)
-    .where(eq(scanLogs.serialId, serialId))
-    .orderBy(desc(scanLogs.completedAt))
-    .limit(limit);
+  await db.update(detections).set({ status }).where(eq(detections.id, id));
+}
+
+export async function getNewDetectionsCount(userId: number): Promise<number> {
+  const db = await getDb();
+  if (!db) {
+    // Count from in-memory storage
+    const userSerialIds = inMemoryStore.serials
+      .filter(s => s.userId === userId)
+      .map(s => s.id);
+    
+    return inMemoryStore.detections.filter(
+      d => userSerialIds.includes(d.serialId) && d.status === "new"
+    ).length;
+  }
+
+  // Get all serial IDs for this user
+  const userSerials = await db
+    .select({ id: nccSerials.id })
+    .from(nccSerials)
+    .where(eq(nccSerials.userId, userId));
+
+  if (userSerials.length === 0) return 0;
+
+  const serialIds = userSerials.map((s) => s.id);
+
+  const result = await db
+    .select({ count: sql<number>`COUNT(*)` })
+    .from(detections)
+    .where(
+      and(
+        sql`${detections.serialId} IN (${sql.join(serialIds.map(id => sql`${id}`), sql`, `)})`,
+        eq(detections.status, "new")
+      )
+    );
+
+  return result[0]?.count ?? 0;
+}
+
+// ==================== Scan Log Functions ====================
+
+export async function createScanLog(data: InsertScanLog): Promise<void> {
+  const db = await getDb();
+  if (!db) {
+    // Skip scan logs in demo mode
+    console.log("[Database] Scan log skipped in demo mode:", data);
+    return;
+  }
+
+  await db.insert(scanLogs).values(data);
 }
 
 // ==================== Dashboard Stats ====================
@@ -321,41 +435,76 @@ export async function getRecentScanLogs(
 export async function getDashboardStats(userId: number) {
   const db = await getDb();
   if (!db) {
+    // Return stats from in-memory storage
+    const userSerials = inMemoryStore.serials.filter(s => s.userId === userId);
+    const userSerialIds = userSerials.map(s => s.id);
+    const userDetections = inMemoryStore.detections.filter(d => userSerialIds.includes(d.serialId));
+    
+    return {
+      totalSerials: userSerials.length,
+      activeSerials: userSerials.filter(s => s.isActive).length,
+      totalDetections: userDetections.length,
+      newDetections: userDetections.filter(d => d.status === "new").length,
+      shopeeDetections: userDetections.filter(d => d.isShopee).length,
+      recentDetections: userDetections
+        .sort((a, b) => b.detectedAt.getTime() - a.detectedAt.getTime())
+        .slice(0, 5) as Detection[],
+    };
+  }
+
+  const userSerials = await getUserSerials(userId);
+  const serialIds = userSerials.map((s) => s.id);
+
+  if (serialIds.length === 0) {
     return {
       totalSerials: 0,
       activeSerials: 0,
       totalDetections: 0,
       newDetections: 0,
       shopeeDetections: 0,
-      newShopeeDetections: 0,
+      recentDetections: [],
     };
   }
 
-  const serialsResult = await db
-    .select({
-      total: sql<number>`count(*)`,
-      active: sql<number>`sum(case when isActive = true then 1 else 0 end)`,
-    })
-    .from(nccSerials)
-    .where(eq(nccSerials.userId, userId));
+  const [totalDetectionsResult, newDetectionsResult, shopeeDetectionsResult] =
+    await Promise.all([
+      db
+        .select({ count: sql<number>`COUNT(*)` })
+        .from(detections)
+        .where(sql`${detections.serialId} IN (${sql.join(serialIds.map(id => sql`${id}`), sql`, `)})`),
+      db
+        .select({ count: sql<number>`COUNT(*)` })
+        .from(detections)
+        .where(
+          and(
+            sql`${detections.serialId} IN (${sql.join(serialIds.map(id => sql`${id}`), sql`, `)})`,
+            eq(detections.status, "new")
+          )
+        ),
+      db
+        .select({ count: sql<number>`COUNT(*)` })
+        .from(detections)
+        .where(
+          and(
+            sql`${detections.serialId} IN (${sql.join(serialIds.map(id => sql`${id}`), sql`, `)})`,
+            eq(detections.isShopee, true)
+          )
+        ),
+    ]);
 
-  const detectionsResult = await db
-    .select({
-      total: sql<number>`count(*)`,
-      new: sql<number>`sum(case when ${detections.status} = 'new' then 1 else 0 end)`,
-      shopee: sql<number>`sum(case when ${detections.isShopee} = true then 1 else 0 end)`,
-      newShopee: sql<number>`sum(case when ${detections.isShopee} = true and ${detections.status} = 'new' then 1 else 0 end)`,
-    })
+  const recentDetections = await db
+    .select()
     .from(detections)
-    .innerJoin(nccSerials, eq(detections.serialId, nccSerials.id))
-    .where(eq(nccSerials.userId, userId));
+    .where(sql`${detections.serialId} IN (${sql.join(serialIds.map(id => sql`${id}`), sql`, `)})`)
+    .orderBy(desc(detections.detectedAt))
+    .limit(5);
 
   return {
-    totalSerials: serialsResult[0]?.total ?? 0,
-    activeSerials: serialsResult[0]?.active ?? 0,
-    totalDetections: detectionsResult[0]?.total ?? 0,
-    newDetections: detectionsResult[0]?.new ?? 0,
-    shopeeDetections: detectionsResult[0]?.shopee ?? 0,
-    newShopeeDetections: detectionsResult[0]?.newShopee ?? 0,
+    totalSerials: userSerials.length,
+    activeSerials: userSerials.filter((s) => s.isActive).length,
+    totalDetections: totalDetectionsResult[0]?.count ?? 0,
+    newDetections: newDetectionsResult[0]?.count ?? 0,
+    shopeeDetections: shopeeDetectionsResult[0]?.count ?? 0,
+    recentDetections,
   };
 }
